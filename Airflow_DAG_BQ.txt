@@ -1,0 +1,88 @@
+from airflow import DAG  
+from airflow.operators.bash import BashOperator 
+from airflow.utils.dates import days_ago 
+from datetime import datetime  
+from airflow.contrib.operators.bigquery_operator import BigQueryOperator 
+
+
+default_args = {
+owner': 'Mikhail',  
+depends_on_past': False,
+start_date': datetime(2021, 6, 02),
+email': ['airflow@airflow.com'], 
+email_on_failure': True,
+email_on_retry': False
+}
+
+
+with DAG(
+mart_data.marketing_account', 
+default_args=default_args,
+catchup=False,  
+schedule_interval='0 3 * * *', 
+dagrun_timeout=timedelta(minutes=60) 
+) as dag:
+t1 = BigQueryOperator(
+task_id='marketing_account_stg', 
+use_legacy_sql=False,
+write_disposition='WRITE_TRUNCATE',
+allow_large_results=True,
+bql='''
+
+select
+sdate,
+source_type,
+date,
+account_name,
+cost,
+status_l.Stage_of_lead
+from (
+select
+sysdate sdate 
+,'google' source_type
+,date
+,account_name
+,cost
+from raw_data.google_ads
+union all
+select
+sysdate sdate 
+,'yandex' source_type
+,date
+,account_name
+,cost
+from raw_data.yandex_direct) bb -
+left join raw_data.crm_deals status_l on bb.date=status_l.Date_Create
+and bb.account_name=status_l.account_name 
+'', 
+destination_dataset_table='mart_data.marketing_account_stg ${{ yesterday_ds_nodash }}',
+dag=dag)
+
+t2 = BigQueryOperator(
+task_id='marketing_account_final', 
+use_legacy_sql=False,
+write_disposition='WRITE_TRUNCATE',
+allow_large_results=True,
+bql='''
+MERGE INTO mart_data.marketing_account acc 
+USING (SELECT
+sdate,
+source_type,
+date,
+account_name,
+cost,
+Stage_of_lead
+FROM mart_data.marketing_account_stg
+WHERE sdate = sysdate 
+) stg
+ON (acc.date = stg.date and acc.account_name = stg.account_name) 
+WHEN MATCHED THEN UPDATE SET acc.cost = stg.cost and acc.Stage_of_lead = stg.Stage_of_lead
+where date between sysdate - 30 and sysdate 
+WHEN NOT MATCHED THEN INSERT (sdate, source_type, date, account_name, cost, Stage_of_lead)
+VALUES (sdate, source_type, date, account_name, cost, Stage_of_lead)
+where date between sysdate - 30 and sysdate; 
+'',
+destination_dataset_table='mart_data.marketing_account ${{ yesterday_ds_nodash }}', 
+dag=dag)
+
+task_1 >> task_2 
